@@ -16,6 +16,17 @@ export class TransactionService {
 
   async processSms(payload: SmsPayload) {
     const { userId, sender, body, receivedAt } = payload;
+
+    // 0. Ensure User exists (Simulation/Demo Support)
+    await this.prisma.user.upsert({
+      where: { id: userId },
+      update: {},
+      create: { 
+        id: userId, 
+        phoneNumber: userId === 'demo-user-1' ? '9999999999' : sender,
+        name: userId === 'demo-user-1' ? 'Demo User' : 'Unknown'
+      },
+    });
     
     // 1. Deduplication using Hash
     const hash = TextHasher.generateSmsHash(userId, body, sender, receivedAt);
