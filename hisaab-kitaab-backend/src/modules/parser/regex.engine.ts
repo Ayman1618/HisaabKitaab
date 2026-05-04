@@ -3,28 +3,48 @@ import { ParseResult } from './interfaces';
 
 @Injectable()
 export class RegexEngine {
-  // 1. Identify patterns to IGNORE (OTPs, Promos, Account Numbers)
-  private readonly ignoreRegex = /(otp|one time password|code is|pwd|verification|offer|discount|promo|free|claim now)/i;
-  private readonly accountPattern = /(?:a\/c|ac\/no|acct|account|xx)\s*(\d{3,})/i;
+  private readonly ignoreRegex =
+    /\b(otp|one.?time.?password|verification code|password|otp is|code is|pwd|offer|discount|promo|free|claim now|congratulations|lucky|winner)\b/i;
 
-  // 2. Comprehensive Amount Regex (looks for currency symbols followed by numbers)
-  private readonly amountPattern = /(?:rs\.?|inr|₹|inr\.)\s*([\d,]+(?:\.\d{1,2})?)/i;
+  private readonly amountPattern =
+    /(?:rs\.?\s*|inr\.?\s*|₹\s*)([1-9][\d,]*(?:\.\d{1,2})?)/gi;
 
-  // 3. Transaction Types
-  private readonly expensePattern = /(debited|spent|paid|payment|sent to|transfer to|dr|used for)/i;
-  private readonly incomePattern = /(credited|received|added|deposited|received from|cr|salary)/i;
+  private readonly expensePattern =
+    /\b(debited|debit|spent|paid|payment|sent\s+to|transferred?\s+to|purchase|dr\.?|used\s+for|charged|withdrawn)\b/i;
+  private readonly incomePattern =
+    /\b(credited|credit|received|added|deposited|cr\.?|salary|refund|cashback|reversal)\b/i;
 
-  // 4. Merchant patterns
-  private readonly merchantPatterns = [
-    /(?:at|to|on)\s+([^.\n]{2,25})(?:\s+on|\s+ref|\s+using|$)/i, 
-    /(?:info\s+|vpa\s+|ref:?\s*)([^.\n]{2,25})/i,
-    /for\s+([^.\n]{2,25})(?:\s+on|\s+ref|$)/i
+  private readonly merchantPatterns: RegExp[] = [
+    /\bat\s+([A-Za-z0-9 &.'_-]{2,30}?)(?:\s+on\b|\s+ref\b|\s+via\b|\.|\n|$)/i,
+    /\bto\s+([A-Za-z0-9 &.'_-]{2,30}?)(?:\s+on\b|\s+ref\b|\s+via\b|\.|\n|$)/i,
+    /\bfor\s+([A-Za-z0-9 &.'_-]{2,30}?)(?:\s+on\b|\s+ref\b|\s+order\b|\.|\n|$)/i,
+    /info\s*:\s*([A-Za-z0-9 &.'_-]{2,40}?)(?:\.|,|\n|$)/i,
+    /\bvpa\s+([A-Za-z0-9@._-]{3,40})/i,
+  ];
+
+  private readonly knownMerchants: [RegExp, string, string][] = [
+    [/zomato/i, 'Zomato', 'FOOD'],
+    [/swiggy/i, 'Swiggy', 'FOOD'],
+    [/amazon\s*pay/i, 'Amazon Pay', 'SHOPPING'],
+    [/amazon/i, 'Amazon', 'SHOPPING'],
+    [/flipkart/i, 'Flipkart', 'SHOPPING'],
+    [/uber\s*eats/i, 'Uber Eats', 'FOOD'],
+    [/\buber\b/i, 'Uber', 'TRAVEL'],
+    [/\bola\b/i, 'Ola', 'TRAVEL'],
+    [/rapido/i, 'Rapido', 'TRAVEL'],
+    [/netflix/i, 'Netflix', 'ENTERTAINMENT'],
+    [/spotify/i, 'Spotify', 'ENTERTAINMENT'],
+    [/hotstar|disney\+/i, 'Hotstar', 'ENTERTAINMENT'],
+    [/paytm/i, 'Paytm', 'OTHER'],
+    [/phonepe/i, 'PhonePe', 'OTHER'],
+    [/gpay|google pay/i, 'Google Pay', 'OTHER'],
+    [/irctc/i, 'IRCTC', 'TRAVEL'],
+    [/makemytrip|mmt/i, 'MakeMyTrip', 'TRAVEL'],
+    [/electricity|bescom|msedcl|tata power/i, 'Electricity Bill', 'BILLS'],
+    [/recharge|jio|airtel|bsnl|\bvi\b/i, 'Mobile Recharge', 'BILLS'],
   ];
 
   extract(text: string): ParseResult {
-    const lowerText = text.toLowerCase();
-    
-    // Check if it's junk
     if (this.ignoreRegex.test(text)) {
       return this.createEmptyResult();
     }
@@ -32,86 +52,88 @@ export class RegexEngine {
     let amount: number | null = null;
     let type: 'expense' | 'income' | 'unknown' = 'unknown';
     let merchant: string | null = null;
+    let category: string = 'OTHER';
     let confidence = 0.0;
 
-    // 1. Extract AMOUNT (picking the largest number linked to currency)
-    const amountMatches = [...text.matchAll(new RegExp(this.amountPattern, 'gi'))];
-    if (amountMatches.length > 0) {
-      // Convert all matches to numbers and pick the largest one (usually the amount)
-      const amounts = amountMatches.map(m => parseFloat(m[1].replace(/,/g, '')));
+    const allAmountMatches = [...text.matchAll(this.amountPattern)];
+    if (allAmountMatches.length > 0) {
+      const amounts = allAmountMatches.map(m => parseFloat(m[1].replace(/,/g, '')));
       amount = Math.max(...amounts);
-      confidence += 0.5;
+      confidence += 0.45;
     }
 
-    // 2. Extract TYPE
-    if (this.expensePattern.test(text)) {
+    const isExpense = this.expensePattern.test(text);
+    const isIncome = this.incomePattern.test(text);
+
+    if (isExpense && !isIncome) {
       type = 'expense';
-      confidence += 0.2;
-    } else if (this.incomePattern.test(text)) {
+      confidence += 0.25;
+    } else if (isIncome && !isExpense) {
       type = 'income';
-      if (lowerText.includes('salary')) {
-        merchant = 'Salary / Payroll';
-        type = 'income';
-      }
-      confidence += 0.2;
+      confidence += 0.25;
+    } else if (isExpense && isIncome) {
+      type = text.toLowerCase().includes('salary') ? 'income' : 'expense';
+      confidence += 0.10;
     }
 
-    // 3. Extract MERCHANT (if not already set by Salary)
+    for (const [pattern, name, cat] of this.knownMerchants) {
+      if (pattern.test(text)) {
+        merchant = name;
+        category = cat;
+        confidence += 0.20;
+        break;
+      }
+    }
+
+    if (!merchant && /\bsalary\b/i.test(text)) {
+      merchant = 'Salary / Payroll';
+      category = 'SALARY';
+      type = 'income';
+      confidence = Math.max(confidence, 0.80);
+    }
+
     if (!merchant) {
-      // Priority 1: Specifically check for big brands
-      if (lowerText.includes('amazon')) merchant = 'Amazon';
-      else if (lowerText.includes('zomato')) merchant = 'Zomato';
-      else if (lowerText.includes('swiggy')) merchant = 'Swiggy';
-      else if (lowerText.includes('uber')) merchant = 'Uber';
-      else if (lowerText.includes('ola')) merchant = 'Ola';
-      else {
-        // Priority 2: Use patterns (at, to, ref, etc.)
-        for (const pattern of this.merchantPatterns) {
-          const match = text.match(pattern);
-          if (match && match[1]) {
-            merchant = match[1].trim();
+      for (const pattern of this.merchantPatterns) {
+        const match = text.match(pattern);
+        if (match?.[1]) {
+          const candidate = match[1].trim().replace(/\s+/g, ' ');
+          if (!/^(your|bank|account|card|a\/c|ac\b)/i.test(candidate) && candidate.length >= 2) {
+            merchant = candidate;
+            confidence += 0.10;
             break;
           }
         }
       }
     }
 
-    if (merchant) confidence += 0.2;
+    if (category === 'OTHER') {
+      category = this.predictCategory(text, merchant);
+    }
 
-    // 4. Final Cleanup & Category
-    const is_transaction = amount !== null && type !== 'unknown' && amount > 0;
-    
+    const is_transaction = amount !== null && amount > 0 && type !== 'unknown';
+
     return {
       amount,
       type,
-      merchant: merchant || (type === 'income' ? 'Income Received' : 'Expense'),
-      category: this.predictCategory(text, merchant),
-      confidence: Math.min(confidence, 0.98),
+      merchant: merchant ?? (type === 'income' ? 'Income' : type === 'expense' ? 'Payment' : null),
+      category,
+      confidence: Math.min(confidence, 0.97),
       is_transaction,
     };
   }
 
-  private predictCategory(text: string, merchant: string | null): any {
-    const combined = (text + ' ' + (merchant || '')).toLowerCase();
-    
-    if (combined.includes('salary') || combined.includes('payroll')) return 'SALARY';
-    if (combined.includes('zomato') || combined.includes('swiggy') || combined.includes('food') || combined.includes('restaurant')) return 'FOOD';
-    if (combined.includes('uber') || combined.includes('ola') || combined.includes('travel') || combined.includes('petrol')) return 'TRAVEL';
-    if (combined.includes('amazon') || combined.includes('flipkart') || combined.includes('shopping')) return 'SHOPPING';
-    if (combined.includes('bill') || combined.includes('recharge') || combined.includes('electricity')) return 'BILLS';
-    if (combined.includes('netflix') || combined.includes('movie') || combined.includes('entertainment')) return 'ENTERTAINMENT';
-    
+  private predictCategory(text: string, merchant: string | null): string {
+    const haystack = `${text} ${merchant ?? ''}`.toLowerCase();
+    if (/salary|payroll|wages/i.test(haystack)) return 'SALARY';
+    if (/food|restaurant|cafe|hotel|dine|eat|meal|pizza|burger|biryani/i.test(haystack)) return 'FOOD';
+    if (/petrol|fuel|toll|cab|taxi|bus|train|flight|travel|metro|ola|uber|rapido/i.test(haystack)) return 'TRAVEL';
+    if (/amazon|flipkart|myntra|shopping|clothes|shoes|apparel/i.test(haystack)) return 'SHOPPING';
+    if (/electricity|water|gas|recharge|broadband|bill|subscription/i.test(haystack)) return 'BILLS';
+    if (/netflix|movie|cinema|pvr|inox|hotstar|spotify|entertainment/i.test(haystack)) return 'ENTERTAINMENT';
     return 'OTHER';
   }
 
   private createEmptyResult(): ParseResult {
-    return {
-      amount: null,
-      type: 'unknown',
-      merchant: null,
-      category: 'OTHER',
-      confidence: 0,
-      is_transaction: false,
-    };
+    return { amount: null, type: 'unknown', merchant: null, category: 'OTHER', confidence: 0, is_transaction: false };
   }
 }

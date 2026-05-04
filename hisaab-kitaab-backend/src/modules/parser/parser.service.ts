@@ -3,6 +3,9 @@ import { RegexEngine } from './regex.engine';
 import { AiEngine } from './ai.engine';
 import { ParseResult } from './interfaces';
 
+const REGEX_CONFIDENCE_THRESHOLD = 0.70;
+const MANUAL_REVIEW_THRESHOLD = 0.50;
+
 @Injectable()
 export class ParserService {
   private readonly logger = new Logger(ParserService.name);
@@ -18,35 +21,42 @@ export class ParserService {
     aiResult?: ParseResult;
     requiresManualReview: boolean;
   }> {
-    this.logger.debug(`Parsing SMS: ${smsText}`);
-
-    // 1. Rule-based Extraction (Regex)
     const regexResult = this.regexEngine.extract(smsText);
     let finalResult = regexResult;
-    let aiResult: ParseResult | undefined = undefined;
+    let aiResult: ParseResult | undefined;
 
-    // 2. Logic Check & Confidence Threshold (0.7)
-    if (!regexResult.is_transaction && regexResult.confidence >= 0.90) {
+    // High confidence regex — skip AI entirely
+    if (regexResult.is_transaction && regexResult.confidence >= REGEX_CONFIDENCE_THRESHOLD) {
       return { finalResult, regexResult, requiresManualReview: false };
     }
 
-    // AI Fallback
-    if (regexResult.confidence < 0.7 || !regexResult.is_transaction) {
-      this.logger.debug(`Regex confidence ${regexResult.confidence} < 0.7. Falling back to AI.`);
-      
-      try {
-        aiResult = await this.aiEngine.extract(smsText);
-        
-        if (aiResult.confidence > regexResult.confidence) {
-          finalResult = aiResult;
-        }
-      } catch (error) {
-        this.logger.error(`AI extraction failed`, error);
-      }
+    // Very low confidence — probably junk/OTP, skip AI
+    if (!regexResult.is_transaction && regexResult.confidence < 0.20) {
+      return { finalResult, regexResult, requiresManualReview: false };
     }
 
-    // 3. Manual Review check (If final confidence < 0.5)
-    const requiresManualReview = finalResult.confidence < 0.5;
+    // Ambiguous — invoke AI fallback
+    this.logger.debug(
+      `Regex confidence ${regexResult.confidence.toFixed(2)} below threshold. Invoking AI fallback.`,
+    );
+
+    try {
+      aiResult = await this.aiEngine.extract(smsText);
+      if (
+        aiResult.confidence > regexResult.confidence + 0.05 ||
+        (!regexResult.is_transaction && aiResult.is_transaction)
+      ) {
+        finalResult = {
+          ...aiResult,
+          amount: aiResult.amount ?? regexResult.amount,
+          merchant: aiResult.merchant ?? regexResult.merchant,
+        };
+      }
+    } catch (error) {
+      this.logger.error('AI extraction failed, keeping regex result', (error as Error).message);
+    }
+
+    const requiresManualReview = finalResult.confidence < MANUAL_REVIEW_THRESHOLD && finalResult.is_transaction;
 
     return { finalResult, regexResult, aiResult, requiresManualReview };
   }

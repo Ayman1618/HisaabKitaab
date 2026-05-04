@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // During local development, replace with your machine's local IP Address (e.g., http://192.168.1.5:3000)
-const API_URL = 'http://192.168.137.232:3000/api/v1'; 
+const API_URL = 'http://192.168.203.216:3000/api/v1'; 
 
 const api = axios.create({
   baseURL: API_URL,
