@@ -1,13 +1,14 @@
 import axios from 'axios';
 
-// During local development, replace with your machine's local IP Address (e.g., http://192.168.1.5:3000)
-const API_URL = 'http://192.168.203.216:3000/api/v1'; 
+// ── Update this to your Mac's current Wi-Fi IP ──────────────────────────────
+const API_URL = 'http://192.168.203.216:3000/api/v1';
+// ────────────────────────────────────────────────────────────────────────────
 
 const api = axios.create({
   baseURL: API_URL,
   timeout: 15000,
   headers: {
-    'x-user-id': 'demo-user-1', // Temporary identification
+    'x-user-id': 'demo-user-1',
   },
 });
 
@@ -18,29 +19,32 @@ export interface SmsMessagePayload {
 }
 
 export const BackendAPI = {
-  /**
-   * Pushes the Android SMS batch directly to our centralized NestJS backend.
-   */
   syncMessages: async (messages: SmsMessagePayload[]) => {
-    try {
-      const response = await api.post('/sms/sync', { messages });
-      return response.data;
-    } catch (error) {
-      console.error('Failed to sync SMS batch to backend:', error);
-      throw error;
-    }
+    const response = await api.post('/sms/sync', { messages });
+    return response.data;
   },
 
-  /**
-   * Fetches processed transactions from the backend.
-   */
-  getTransactions: async () => {
-    try {
-      const response = await api.get('/transactions');
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch transactions:', error);
-      throw error;
-    }
-  }
+  getTransactions: async (params?: { limit?: number; category?: string; type?: string }) => {
+    const response = await api.get('/transactions', { params });
+    return response.data;
+  },
+
+  getSummary: async () => {
+    const response = await api.get('/transactions/summary');
+    return response.data;
+  },
+
+  getMonthlySummary: async (year: number, month: number) => {
+    const response = await api.get('/transactions/summary/monthly', {
+      params: { year, month },
+    });
+    return response.data;
+  },
+
+  getTopMerchants: async (year: number, month: number, limit = 5) => {
+    const response = await api.get('/transactions/top-merchants', {
+      params: { year, month, limit },
+    });
+    return response.data;
+  },
 };
